@@ -1,4 +1,4 @@
-import os
+# import os
 import math
 import pickle
 # from itertools import chain
@@ -45,7 +45,7 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from data import AirIMUData
 import argparse
 # from diffusers.optimization import get_cosine_schedule_with_warmup
-import prettytable
+# import prettytable
 from backbones.rnn import RNNConditionalNetwork
 
 
@@ -200,14 +200,6 @@ def compute_metric(res):
 #     return tables
 
 
-# def evaluate_model_full_trajectory(model, dataset):
-#     """
-#     It evaluates for the full trajectory,
-#     at the cost of limiting batch size to 1
-#     """
-#     pass
-
-
 class IMUDiffusion(LightningModule):
     def __init__(self,
                  cfg
@@ -227,6 +219,7 @@ class IMUDiffusion(LightningModule):
             raise ValueError(f"Unsupported model type: {cfg.model_type}")
         self.train_noise_scheduler = DDPMScheduler()
         self.infer_noise_scheduler = DDIMScheduler()
+        self.n_inference_timesteps = 25
 
         # FIXME: temporarily, hard code cfg in dict
         self.cfg = cfg
@@ -387,16 +380,16 @@ class IMUDiffusion(LightningModule):
                                         inference_state=self.evaluate_states, seqlen=self.cfg.seqlen, device=self.device)
             res = compute_metric(res)
             # self.log_dict(res)
-            tables = make_table_from_metric(res)
-            for table, name in tables:
-                # print(name)
-                # print(table.data)
-                pt = prettytable.PrettyTable()
-                pt.field_names = table.columns
-                pt.add_rows(table.data)
-                print(pt)
-                self.logger.log_table(
-                    key=name, columns=table.columns, data=table.data)
+            # tables = make_table_from_metric(res)
+            # for table, name in tables:
+            #     # print(name)
+            #     # print(table.data)
+            #     pt = prettytable.PrettyTable()
+            #     pt.field_names = table.columns
+            #     pt.add_rows(table.data)
+            #     print(pt)
+            #     self.logger.log_table(
+            #         key=name, columns=table.columns, data=table.data)
 
         # TODO: log the evaluation result (e.g. with w&b)
         # return self.evaluate_states
@@ -406,43 +399,20 @@ class IMUDiffusion(LightningModule):
             pickle.dump(states, f,
                         protocol=pickle.HIGHEST_PROTOCOL)
 
-    # def get_train_pipeline(self) -> DiffusionPipeline:
-    #     pipe = DDPMPipeline(self.model, self.train_noise_scheduler).to(
-    #         device=self.device, dtype=self.dtype)  # .to() isn't necessary
-    #     pipe.set_progress_bar_config(disable=True)
-    #     return pipe
-
-    # def get_infer_pipeline(self) -> DiffusionPipeline:
-    #     pipe = DDIMOverridePipeline(self.model, self.infer_noise_scheduler).to(
-    #         device=self.device, dtype=self.dtype)  # .to() isn't necessary
-    #     pipe.set_progress_bar_config(disable=True)
-    #     return pipe
 
     def sample(self, imu_reading, **kwargs: dict):
-        # kwargs.pop('output_type', None)
-        # kwargs.pop('return_dict', False)
-
-        # move the related pipeline logic here
-        
-        pipe = self.get_infer_pipeline()
-
-        # FIXME: here, we want to make sampling noise smater, right now we hard-code
-        # the noise of the shape (batch_size, 200, 6); this holds true only for window_size=200, bias at IMU rate
-
-        bias_denoised, = pipe(
-            imu_reading.float(),
-            seq_len=4 if self.cfg.mode == "frame_rate" else self.cfg.seqlen,
-            batch_size=imu_reading.size(0),
-            ** kwargs,
-            return_dict=False
-        )
-
+        bias_denoised = self.infer_noise_scheduler.generate(model=self.model, 
+                                                        cond=imu_reading.float(),
+                                                        seq_len=4 if self.cfg.mode == "frame_rate" else self.cfg.seqlen,
+                                                        num_inference_steps=self.n_inference_timesteps,
+                                                        batch_size=imu_reading.shape[0])
         if self.cfg.mode == "frame_rate":
             # in this case, only the first dimension is meaningful
             bias_denoised = bias_denoised[:, 0:1, :].repeat(
                 1, imu_reading.shape[1], 1)
-
         return bias_denoised
+    
+
 
     def save_pretrained(self, path: str, push_to_hub: bool = False):
         # self._fix_hydra_config_serialization()
@@ -451,21 +421,7 @@ class IMUDiffusion(LightningModule):
         pipe.save_pretrained(path, safe_serialization=False,
                              push_to_hub=push_to_hub)
 
-    # def on_validation_epoch_end(self) -> None:
-    #     batch_size = self.inference_cfg.pipeline_kwargs.get(
-    #         'batch_size', self.training_cfg.batch_size * 2)
-
-    #     n_per_rank = matorch.ceil(
-    #         self.inference_cfg.num_samples / self.trainer.world_size)
-    #     n_batches_per_rank = matorch.ceil(
-    #         n_per_rank / batch_size)
-
-    #     # TODO: This may end up accummulating a little more than given 'n_samples'
-    #     with self.metrics():
-    #         for _ in range(n_batches_per_rank):
-    #             pil_images = self.sample(
-    #                 **self.inference_cfg.pipeline_kwargs
-    #             )
+    
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -491,7 +447,6 @@ def main(cfg: DictConfig):
 
     system = IMUDiffusion(cfg.models, cfg.training, cfg.inference)
     # datamodule = ImageDatasets(cfg.data)\
-    # datamodule = None
 
     trainer = Trainer(
         gradient_clip_val=1.0,  # clip_grad_norm_ for diffusion model

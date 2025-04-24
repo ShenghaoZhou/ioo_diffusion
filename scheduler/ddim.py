@@ -278,7 +278,7 @@ class DDIMScheduler:
             # 2. Perform the denoising step: x_t -> x_t-1
             image = self._step(model_output, t, image, eta=eta, generator=generator)
         
-        return {"sample": image.cpu()}
+        return image
 
     def __len__(self):
         return self.num_infer_timesteps
