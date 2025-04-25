@@ -1,0 +1,1 @@
+python model.py --mode train --name my_experiment --dataset euroc --rate_mode imu_rate

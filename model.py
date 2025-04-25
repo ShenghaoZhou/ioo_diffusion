@@ -49,6 +49,9 @@ import argparse
 from backbones.rnn import RNNConditionalNetwork
 
 
+# TODO: handle this global variable better
+data_cfg_root = "/home/shzhou/project/inertia_only/ioo_diffusion_merged/ioo_diffusion/config/airimu_data/exp/"
+
 
 def get_cosine_schedule_with_warmup(
     optimizer: torch.optim.Optimizer, num_warmup_steps: int, num_training_steps: int, num_cycles: float = 0.5, last_epoch: int = -1
@@ -79,13 +82,11 @@ def get_cosine_schedule_with_warmup(
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
-        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / \
+            float(max(1, num_training_steps - num_warmup_steps))
         return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
-
-
-
 
 
 # class PipelineCheckpoint(callbacks.ModelCheckpoint):
@@ -99,8 +100,8 @@ def get_cosine_schedule_with_warmup(
 #         )
 #         pl_module.save_pretrained(pipe_path)
 
-        # different from original implementation, we just save the pipeline, not the model
-        # return super().on_save_checkpoint(trainer, pl_module, checkpoint)
+    # different from original implementation, we just save the pipeline, not the model
+    # return super().on_save_checkpoint(trainer, pl_module, checkpoint)
 
 
 def infer_window(dataset_conf, model, batch_size, collate_fn, seqlen=200):
@@ -131,7 +132,6 @@ def evaluate_model_window(dataset_conf, inference_state, seqlen, device):
     # TODO: need to verify the result to match original implementation
     start_idx = 0
     res = {}
-
 
     for data_conf in dataset_conf.data_list:
         print(data_conf)
@@ -226,9 +226,6 @@ class IMUDiffusion(LightningModule):
         self.cfg = DictConfig(self.cfg)
         self.save_hyperparameters(self.cfg)
 
-
-
-
     # def temp_load_from_ckpt(self, ckpt_path: str):
     #     # saved ckpt_path is the pipeline path, we can recover the full HF pipeline
     #     pipeline = DDPMPipeline.from_pretrained(
@@ -270,7 +267,7 @@ class IMUDiffusion(LightningModule):
 
         timesteps = torch.randint(
             low=0,
-            high=self.train_noise_scheduler.config.num_train_timesteps,
+            high=self.train_noise_scheduler.num_train_timesteps,
             size=(bias.size(0), ), device=self.device
         ).long()
         noisy_bias = self.train_noise_scheduler.add_noise(
@@ -279,7 +276,7 @@ class IMUDiffusion(LightningModule):
         # Predict the noise residual
         global_cond_input = imu_reading
         model_output = self.model(
-            noisy_bias, timesteps, global_cond_input=global_cond_input, return_dict=False)[0]
+            noisy_bias, timesteps, global_cond_input=global_cond_input)[0]
 
         # FIXME: should we take the loss on only the first dimension, for frame rate case
         # if self.cfg.mode == "frame_rate":
@@ -339,9 +336,6 @@ class IMUDiffusion(LightningModule):
         #     {"total_metric": metric}, step=self.global_step)
         self.log("total_metric", metric)
 
-
-
-
     def on_test_start(self):
         self.evaluate_states = defaultdict(list)
 
@@ -399,20 +393,17 @@ class IMUDiffusion(LightningModule):
             pickle.dump(states, f,
                         protocol=pickle.HIGHEST_PROTOCOL)
 
-
     def sample(self, imu_reading, **kwargs: dict):
-        bias_denoised = self.infer_noise_scheduler.generate(model=self.model, 
-                                                        cond=imu_reading.float(),
-                                                        seq_len=4 if self.cfg.mode == "frame_rate" else self.cfg.seqlen,
-                                                        num_inference_steps=self.n_inference_timesteps,
-                                                        batch_size=imu_reading.shape[0])
+        bias_denoised = self.infer_noise_scheduler.generate(model=self.model,
+                                                            cond=imu_reading.float(),
+                                                            seq_len=4 if self.cfg.mode == "frame_rate" else self.cfg.seqlen,
+                                                            num_inference_steps=self.n_inference_timesteps,
+                                                            batch_size=imu_reading.shape[0])
         if self.cfg.mode == "frame_rate":
             # in this case, only the first dimension is meaningful
             bias_denoised = bias_denoised[:, 0:1, :].repeat(
                 1, imu_reading.shape[1], 1)
         return bias_denoised
-    
-
 
     def save_pretrained(self, path: str, push_to_hub: bool = False):
         # self._fix_hydra_config_serialization()
@@ -420,8 +411,6 @@ class IMUDiffusion(LightningModule):
         pipe = self.get_train_pipeline()
         pipe.save_pretrained(path, safe_serialization=False,
                              push_to_hub=push_to_hub)
-
-    
 
     def configure_optimizers(self):
         optim = torch.optim.AdamW(
@@ -441,33 +430,32 @@ class IMUDiffusion(LightningModule):
         }
 
 
+# def main(cfg: DictConfig):
+#     OmegaConf.resolve(cfg)  # resolve all string interpolation
+#     system = IMUDiffusion(cfg)
+#     # system = IMUDiffusion(cfg.models, cfg.training, cfg.inference)
+#     # datamodule = ImageDatasets(cfg.data)\
 
-def main(cfg: DictConfig):
-    OmegaConf.resolve(cfg)  # resolve all string interpolation
+#     trainer = Trainer(
+#         gradient_clip_val=1.0,  # clip_grad_norm_ for diffusion model
+#         callbacks=[
+#             callbacks.LearningRateMonitor(
+#                 'epoch', log_momentum=True, log_weight_decay=True),
+#             # PipelineCheckpoint(mode='min', monitor='FID'),
+#             # PipelineCheckpoint(),
+#             callbacks.RichProgressBar()
+#         ],
+#         # logger=hy.utils.instantiate(cfg.logger, _recursive_=True),
+#         **cfg.pl_trainer
+#     )
 
-    system = IMUDiffusion(cfg.models, cfg.training, cfg.inference)
-    # datamodule = ImageDatasets(cfg.data)\
+#     # FIXME: we need to move dataset related config to the new config system
+#     train_loader = SeqeuncesDataset(
+#         data_set_config=cfg.dataset.train)
 
-    trainer = Trainer(
-        gradient_clip_val=1.0,  # clip_grad_norm_ for diffusion model
-        callbacks=[
-            callbacks.LearningRateMonitor(
-                'epoch', log_momentum=True, log_weight_decay=True),
-            # PipelineCheckpoint(mode='min', monitor='FID'),
-            # PipelineCheckpoint(),
-            callbacks.RichProgressBar()
-        ],
-        # logger=hy.utils.instantiate(cfg.logger, _recursive_=True),
-        **cfg.pl_trainer
-    )
-
-    # FIXME: we need to move dataset related config to the new config system
-    train_loader = SeqeuncesDataset(
-        data_set_config=cfg.dataset.train)
-
-    trainer.fit(system, train_dataloaders=train_loader,
-                ckpt_path=cfg.resume_from_checkpoint
-                )
+#     trainer.fit(system, train_dataloaders=train_loader,
+#                 ckpt_path=cfg.resume_from_checkpoint
+#                 )
 
 
 def train(name, dataset_name, rate_mode, ckpt_path=None):
@@ -483,15 +471,18 @@ def train(name, dataset_name, rate_mode, ckpt_path=None):
     model_cfg = {"eval_on_test": True, "seqlen": seqlen,
                  #  "out_len": 1,
                  "mode": rate_mode,
-                 "learning_rate": 8e-5}
+                 "learning_rate": 8e-5,
+                 "model_type": "unet",
+                 }
+    model_cfg = DictConfig(model_cfg)
     system = IMUDiffusion(model_cfg)
     # datamodule = ImageDatasets(cfg.data)\
-    tb_logger = TensorBoardLogger("lightning_logs", name=name)
+    # tb_logger = TensorBoardLogger("lightning_logs", name=name)
     # training log with tensorboard by default
     trainer = Trainer(
         max_epochs=20000,
         gradient_clip_val=1.0,  # clip_grad_norm_ for diffusion model
-        logger=tb_logger,
+        # logger=tb_logger,
         devices=1, num_nodes=1,
         check_val_every_n_epoch=5,
         callbacks=[
@@ -509,7 +500,7 @@ def train(name, dataset_name, rate_mode, ckpt_path=None):
     data_cfg = {"seqlen": seqlen, "batch_size": batch_size,
                 "data_name": dataset_name, "overlap_factor": overlap_factor}
     data_cfg = DictConfig(data_cfg)
-    data_cfg_path = f"/home/shzhou/project/inertia_only/AirIMU/configs/exp/{data_cfg.data_name}/codenet.conf"
+    data_cfg_path = osp.join(data_cfg_root, f"{dataset_name}/codenet.conf")
 
     data_module = AirIMUData(
         data_cfg, data_cfg_path)
@@ -528,15 +519,18 @@ def infer(model_path, dataset_name, rate_mode):
 
     seq_len = 200
 
-    data_cfg_path = f"/home/shzhou/project/inertia_only/AirIMU/configs/exp/{dataset_name}/codenet.conf"
+    data_cfg_path = osp.join(data_cfg_root, f"{dataset_name}/codenet.conf")
 
     model_cfg = {"eval_on_test": True, "seqlen": seq_len,
+                 "model_type": "unet",
                  "mode": rate_mode, "learning_rate": 3e-5,
                  }
+    model_cfg = DictConfig(model_cfg)
     model = IMUDiffusion(model_cfg)
     # test may require training with pytorchligntnign in the first place, let's have a temporary workaround
     # model.temp_load_from_ckpt(model_path)
     model.load_from_checkpoint(model_path)
+
 
     cfg = {"seqlen": seq_len, "batch_size": 2048, "overlap_factor": 1}
     cfg = DictConfig(cfg)
@@ -550,7 +544,8 @@ def infer(model_path, dataset_name, rate_mode):
     # this is equivalent to infer followed by
     # trainer = Trainer()  # dummy trainer for testing only
     # wandb_logger = WandbLogger(log_model="all")
-    trainer = Trainer(logger=wandb_logger, devices=1, num_nodes=1)
+    # trainer = Trainer(logger=wandb_logger, devices=1, num_nodes=1)
+    trainer = Trainer(devices=1, num_nodes=1)
     trainer.test(model, datamodule=data_module)
 
     # infer_window(data_module.airimu_conf.dataset.inference,
@@ -562,22 +557,25 @@ def infer(model_path, dataset_name, rate_mode):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", type=str, default=None, help="train or infer")
+    parser.add_argument("--mode", type=str, default=None,
+                        help="train or infer")
     parser.add_argument(
-        "name", type=str, help="for training, it is run name; for infer, it is model path")
-    parser.add_argument("dataset", type=str, default=None)
-    parser.add_argument("rate_mode", type=str,
+        "--name", type=str, help="for training, it is run name; for infer, it is model path")
+    parser.add_argument("--dataset", type=str, default=None)
+    parser.add_argument("--rate_mode", type=str,
                         help="imu_rate or frame_rate")
     parser.add_argument("--ckpt_path", type=str, default=None)
-    parser.add_argument("--use_wandb", action='store_true', help="Use wandb for logging")
+    parser.add_argument("--use_wandb", action='store_true',
+                        help="Use wandb for logging")
     args = parser.parse_args()
     # train(name="euroc_imu_rate_overlapping_100")
 
-    dataset_name= {"euroc": "EuRoC"}[args.dataset.lower()]
+    dataset_name = {"euroc": "EuRoC"}[args.dataset.lower()]
 
     print(f"begin {args.mode}")
     if args.mode == "train":
-        train(name=args.name, dataset_name=dataset_name, rate_mode=args.rate_mode, ckpt_path=args.ckpt_path)
+        train(name=args.name, dataset_name=dataset_name,
+              rate_mode=args.rate_mode, ckpt_path=args.ckpt_path)
     elif args.mode == "infer":
         infer(model_path=args.name,
               dataset_name=dataset_name, rate_mode=args.rate_mode)

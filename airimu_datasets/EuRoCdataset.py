@@ -2,8 +2,45 @@ import os
 import torch
 import numpy as np
 import pypose as pp
-from utils import qinterp, lookAt
 from .dataset import Sequence
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
+
+
+def qinterp(qs, t, t_int):
+    qs = R.from_quat(qs.numpy())
+    slerp = Slerp(t, qs)
+    interp_rot = slerp(t_int).as_quat()
+    return torch.tensor(interp_rot)
+
+
+def lookAt(dir_vec, up=torch.tensor([0., 0., 1.], dtype=torch.float64), source=torch.tensor([0., 0., 0.], dtype=torch.float64)):
+    '''
+    dir_vec: the tensor shall be (1)
+    return the rotation matrix of the 
+    '''
+    if not isinstance(dir_vec, torch.Tensor):
+        dir_vec = torch.tensor(dir_vec)
+
+    def normalize(x):
+        length = x.norm()
+        if length < 0.005:
+            length = 1
+            warnings.warn('Normlization error that the norm is too small')
+        return x/length
+
+    zaxis = normalize(dir_vec - source)
+    xaxis = normalize(torch.cross(zaxis, up))
+    yaxis = torch.cross(xaxis, zaxis)
+
+    m = torch.tensor([
+        [xaxis[0], xaxis[1], xaxis[2]],
+        [yaxis[0], yaxis[1], yaxis[2]],
+        [zaxis[0], zaxis[1], zaxis[2]],
+    ])
+
+    return m
+
 
 class Euroc(Sequence):
     """
