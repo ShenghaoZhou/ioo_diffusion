@@ -1,1 +1,1 @@
-python model.py --mode train --name my_experiment --dataset euroc --rate_mode imu_rate
+python model.py --mode train --dataset euroc --rate_mode imu_rate --name $1 --lr $2 --model_type $3

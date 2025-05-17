@@ -1,11 +1,13 @@
 import os
 import multiprocessing
+import pathlib
 from zipfile import ZipFile
 from io import BytesIO
 import requests
 import time
 import argparse
 import functools
+from pyhocon import ConfigFactory, ConfigTree, HOCONConverter
 
 urls = (
     "http://robotics.ethz.ch/~asl-datasets/ijrr_euroc_mav_dataset/machine_hall/MH_01_easy/MH_01_easy.zip",
@@ -61,6 +63,45 @@ def download_and_unzip(url, target_dir="."):
     except Exception as e:
         print(f"An unexpected error occurred for {url}: {e}")
 
+
+def setup_data_root_in_config(config_path, target_directory):
+    """Updates the data_root field in the Euroc_200.conf file using pyhocon."""
+    # Ensure the target directory path is absolute
+    absolute_target_directory = os.path.abspath(target_directory)
+
+    try:
+        # Parse the HOCON file
+        conf = ConfigFactory.parse_file(config_path)
+        updated = False
+
+        # Iterate through the main sections (train, test, eval, inference)
+        for section_key in conf:
+            if isinstance(conf[section_key], ConfigTree) and 'data_list' in conf[section_key]:
+                data_list = conf[section_key]['data_list']
+                if isinstance(data_list, list):
+                    # Iterate through datasets in the list
+                    for dataset_conf in data_list:
+                        if isinstance(dataset_conf, ConfigTree) and dataset_conf.get('name') == 'Euroc':
+                            if dataset_conf.get('data_root') != absolute_target_directory:
+                                dataset_conf['data_root'] = absolute_target_directory
+                                updated = True
+
+        if updated:
+            # Write the updated configuration back to the file
+            # Note: HOCONConverter might change formatting/comments
+            with open(config_path, 'w') as f:
+                f.write(HOCONConverter.to_hocon(conf))
+            print(f"Updated data_root in {config_path} to: {absolute_target_directory}")
+        else:
+            print(f"data_root in {config_path} already set to {absolute_target_directory}. No changes made.")
+
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at {config_path}")
+    except Exception as e:
+        print(f"An error occurred while reading or updating the config file {config_path}: {e}")
+
+
+
 if __name__ == "__main__":
     start_time = time.time()
     # Create a pool of worker processes
@@ -70,27 +111,33 @@ if __name__ == "__main__":
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Download and extract EuRoC MAV dataset sequences.")
     parser.add_argument(
-        "--target_dir",
+        "target_dir",
         type=str,
-        default=".",
+        default="./data/euroc",
         help="Directory where the datasets will be downloaded and extracted."
     )
     args = parser.parse_args()
 
     # Ensure the target directory exists
     target_directory = args.target_dir
-    os.makedirs(target_directory, exist_ok=True)
+    # os.makedirs(target_directory, exist_ok=True)
+    pathlib.Path(target_directory).mkdir(parents=True, exist_ok=True)
     print(f"Target directory set to: {os.path.abspath(target_directory)}")
 
     # Create a partial function with the target directory fixed
     # This binds the target_dir argument for the pool.map call later
     download_func = functools.partial(download_and_unzip, target_dir=target_directory)
 
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        # Use pool.map to apply the function to each URL
-        # We use a partial function or lambda if download_and_unzip needs more args fixed
-        pool.map(download_func, urls)
+    # with multiprocessing.Pool(processes=num_processes) as pool:
+    #     # Use pool.map to apply the function to each URL
+    #     # We use a partial function or lambda if download_and_unzip needs more args fixed
+    #     pool.map(download_func, urls)
 
     end_time = time.time()
     print(f"\nAll downloads and extractions completed in {end_time - start_time:.2f} seconds.")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, '..', 'config', 'airimu_data', 'datasets', 'BaselineEuroc', 'Euroc_200.conf')
+    setup_data_root_in_config(config_path, target_directory)
+    print(f"Data root set in config to: {target_directory}")
 
