@@ -385,7 +385,7 @@ def infer(model_path, dataset_name, rate_mode, data_cfg_root):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=3e-5)
-    parser.add_argument("--model_type", type=str, default="unet",
+    parser.add_argument("--model_type", type=str, default="rnn",
                         help="unet or rnn")
     parser.add_argument("--mode", type=str, default=None,
                         help="train or infer")
